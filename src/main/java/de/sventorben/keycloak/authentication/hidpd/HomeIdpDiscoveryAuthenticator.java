@@ -6,6 +6,7 @@ import org.jboss.logging.Logger;
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.AuthenticationFlowError;
 import org.keycloak.authentication.authenticators.browser.AbstractUsernameFormAuthenticator;
+import org.keycloak.authentication.authenticators.browser.WebAuthnConditionalUIAuthenticator;
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.forms.login.LoginFormsProvider;
@@ -14,6 +15,7 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.services.managers.AuthenticationManager;
+import org.keycloak.WebAuthnConstants;
 
 import java.util.List;
 
@@ -24,9 +26,13 @@ final class HomeIdpDiscoveryAuthenticator extends AbstractUsernameFormAuthentica
     private static final Logger LOG = Logger.getLogger(HomeIdpDiscoveryAuthenticator.class);
 
     private final AbstractHomeIdpDiscoveryAuthenticatorFactory.DiscovererConfig discovererConfig;
+    private final WebAuthnConditionalUIAuthenticator webauthnAuth;
 
-    HomeIdpDiscoveryAuthenticator(AbstractHomeIdpDiscoveryAuthenticatorFactory.DiscovererConfig discovererConfig) {
+    HomeIdpDiscoveryAuthenticator(AbstractHomeIdpDiscoveryAuthenticatorFactory.DiscovererConfig discovererConfig, KeycloakSession session) {
         this.discovererConfig = discovererConfig;
+        this.webauthnAuth = session != null
+            ? new WebAuthnConditionalUIAuthenticator(session, ctx -> createLoginForm(ctx.form()))
+            : null;
     }
 
     @Override
@@ -43,6 +49,9 @@ final class HomeIdpDiscoveryAuthenticator extends AbstractUsernameFormAuthentica
                     return;
                 }
             }
+        }
+        if (webauthnAuth != null) {
+            webauthnAuth.fillContextForm(authenticationFlowContext);
         }
         context.authenticationChallenge().forceChallenge();
     }
@@ -71,6 +80,13 @@ final class HomeIdpDiscoveryAuthenticator extends AbstractUsernameFormAuthentica
         if (formData.containsKey("cancel")) {
             LOG.debugf("Login canceled");
             authenticationFlowContext.cancelLogin();
+            return;
+        }
+
+        // Handle WebAuthn credential response
+        if (webauthnAuth != null && formData.containsKey(WebAuthnConstants.AUTHENTICATOR_DATA)) {
+            LOG.debugf("WebAuthn credential detected, delegating to WebAuthn authenticator");
+            webauthnAuth.action(authenticationFlowContext);
             return;
         }
 
